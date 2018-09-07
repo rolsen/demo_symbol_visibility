@@ -2,6 +2,8 @@
 
 A demonstration/test of the dangers of using default visibility for symbols in C++ shared libraries.
 
+For the LabJack blog post containing this same information: [Simple C++ Symbol Visibility Demo](https://labjack.com/news/simple-cpp-symbol-visibility-demo)
+
 ## Introduction
 
 This document briefly walks through why and how to use the `-fvisibility=hidden` compilation flag along with `__attribute__((__visibility__("default")))` in symbol declarations.
@@ -83,13 +85,13 @@ Other methods to specify visibility exist, such as using `#pragma` directives. S
 
 Compiling with hidden visibility means that:
 
- - Symbols definitions are assumed to be located within the component using those symbols
+ - Symbol definitions are assumed to be located within the component using those symbols
  - Symbols are not exported
 
 Therefore, if a shared library is compiled with hidden visibility:
 
- - It won't accidentally use symbols from another component
- - It won't let its own symbols be accidentally used by another component
+ - It will not accidentally use symbols from another component
+ - It will not let its own symbols be accidentally used by another component
 
 This is an advantage over `-Bsymbolic` or `-Bsymbolic-functions` because it doesn't matter as much if other shared libraries adhere to correct symbol visibility.
 
@@ -115,9 +117,9 @@ Example debug build flags:
  - `-fvisibility=hidden`
  - `-O2` - moderate size and speed optimizations (many other optimization options exist as well)
 
-Alternately to building for both debug and release, source code could be compiled into a single component with unit test code, so that compiled unit test code has access to compiled source code symbols.
+Alternative to building for both debug and release, source code could be compiled into a single component with unit test code, so that compiled unit test code has access to compiled source code symbols.
 
-#### Downside: Problems with C++ exceptions
+#### Downside: Problems with C++ Exceptions
 
 To use hidden visibility, any defined type that is passed out of a shared library must have exported symbols (i.e. default visibility), including exceptions. This is because when binary code in a given component catches an exception, the exception requires a typeinfo lookup. However, typeinfo symbols for symbols with hidden visibility are also hidden.
 
@@ -144,12 +146,12 @@ PublicGetThree returned 3
 PublicGetSeven returned 7
 ```
 
-### LD_PRELOAD
+### `LD_PRELOAD`
 
-The environment variable LD_PRELOAD can be used to force the runtime loader to load symbols from one library instead of others. However:
+The environment variable `LD_PRELOAD` can be used to force the runtime loader to load symbols from one library instead of others. However:
 
- - LD_PRELOAD is ignored for symbols that were compiled with hidden visibility.
- - LD_PRELOAD is ignored for libraries that were linked with `-Bsymbolic`/`-Bsymbolic-functions`.
+ - `LD_PRELOAD` is ignored for symbols that were compiled with hidden visibility.
+ - `LD_PRELOAD` is ignored for libraries that were linked with `-Bsymbolic`/`-Bsymbolic-functions`.
 
 ## Other Solutions
 
@@ -191,7 +193,7 @@ PublicGetThree returned 3
 PublicGetSeven returned 7
 ```
 
-But if the linking order while linking `test` is swapped so that `libget_seven.so` is seen be the loader first,, `./test` gives incorrect results:
+But if the linking order while linking `test` is swapped so that `libget_seven.so` is seen be the loader first, `./test` gives incorrect results:
 
 ```
 g++ -g -Wall -Wl,-rpath=. -o test test.cpp -L. -lget_seven -lget_three
