@@ -49,7 +49,7 @@ For the purposes of this demonstration, the loader is done at this point and doe
  - `PublicGetSeven()` in `libget_seven.so`, which calls:
  - `internal_do_calculation()` in `libget_three.so`
 
-In real-world situations, this can be problematic, especially since common libraries may be statically compiled into multiple shared libraries, such as via .a archive files or header-only include files. Conflicting versions of such common libraries can be loaded at runtime, resulting in segfaults, deadlocks, and other undefined behavior. For example, [`libLabJackM.so`](https://labjack.com/ljm) (tested with version 1.18.5) and [`libroscpp.so`](http://wiki.ros.org/roscpp) (tested with version Kinetic Kame) both contain external symbol references related to the [Boost C++ libraries](https://www.boost.org/). Specifically, `boost::thread_group` can conflict at runtime, causing deadlocks to occur. (`libLabJackM.so` version 1.18.6 and later is compiled with hidden visibility to solve this issue.)
+In real-world situations, this can be problematic, especially since common libraries may be statically compiled into multiple shared libraries, such as via .a archive files or header-only include files. Conflicting versions of such common libraries can be loaded at runtime, resulting in segfaults, deadlocks, and other undefined behavior. For example, see the symbol conflict between LJM and ROS (fixed as of LJM 1.19) below.
 
 ### Solution: `-fvisibility=hidden` and `__attribute__((__visibility__("default")))`
 
@@ -238,7 +238,7 @@ PublicGetSeven returned 3
 
 ### Namespaces
 
-Namespaces can solve this issue if you have control of the source code being compiled. However, if you're writing a shared library that statically links a popular dependent library, your library's version of a function defined in that popular library may conflict with another shared library's version of that popular library. For an example, see above for the problem with `libLabJackM.so` (pre 1.18.6) and `libroscpp.so` both statically linking Boost headers.
+Namespaces can solve this issue if you have control of the source code being compiled. However, if you're writing a shared library that statically links a popular dependent library, your library's version of a function defined in that popular library may conflict with another shared library's version of that popular library. For an example, see below for the problem with `libLabJackM.so` (pre 1.18.6) and `libroscpp.so` both statically linking Boost headers.
 
 In such a case, hidden visibility circumvents the need to modify third-party code or third-party binaries.
 
@@ -249,6 +249,69 @@ If libraries A and B both use a dependent library C, it can be a problem if A an
 However, if A and B are both compatible with a given major version of library C, dynamic linking solves this issue. All data structures will be initialized and used with the same version of library C.
 
 In some cases, dynamic linking can present a disadvantage. One reason to statically link is to have minimal dependencies for the sake of simple distribution. Another reason is that it's difficult to test all versions of a dependency, so statically linking to a particular version of a dependency allows for consistent behavior of that dependency.
+
+## Real World Example: Boost Thread Conflict in LJM and ROS
+
+[`libLabJackM.so`](https://labjack.com/ljm) (tested with version 1.18.5) and [`libroscpp.so`](http://wiki.ros.org/roscpp) (tested with version Kinetic Kame) both contain external symbol references related to the [Boost C++ libraries](https://www.boost.org/). Specifically, `boost::thread_group` caused conflict at runtime, causing deadlocks to occur. (`libLabJackM.so` version 1.19.0 and later is compiled with hidden visibility to solve this issue.)
+
+The original problem was that a reference to:
+
+ - `boost::thread_group::~thread_group()` in libLabJackM's `DeviceFactory.cpp`
+
+ ...was jumping to:
+
+ - `boost::thread_group::~thread_group()` in `/opt/ros/kinetic/lib/libroscpp.so`:
+
+For example, while debugging a program that linked to both LJM 1.18.5 and ROS Kinetic Kame, a backtrace during deadlock shows the issue.
+
+```
+(gdb) bt
+#0  __pthread_cond_destroy (cond=0x7fffdebebb30) at pthread_cond_destroy.c:76
+#1  0x00007f8587b419e0 in boost::thread_group::~thread_group() () from /opt/ros/kinetic/lib/libroscpp.so
+#2  0x00007f8586d9d9d6 in DeviceFactory::OpenAllMatchingConnections (this=this@entry=0x22b47d0, request=..., cTypes=...,
+    results=results@entry=0x7fffdebebcc0) at source_files/os_indep/DeviceFactory.cpp:581
+#3  0x00007f8586d9dd4c in DeviceFactory::OpenRequestAfterLocks (this=this@entry=0x22b47d0, request=..., cTypes=...,
+    results=results@entry=0x7fffdebebcc0) at source_files/os_indep/DeviceFactory.cpp:432
+#4  0x00007f8586d9df58 in DeviceFactory::OpenRequest (this=this@entry=0x22b47d0, request=..., results=results@entry=0x7fffdebebcc0)
+    at source_files/os_indep/DeviceFactory.cpp:411
+#5  0x00007f8586d9e18d in DeviceFactory::OpenDevice (this=0x22b47d0, adapter=0x22b46d0) at source_files/os_indep/DeviceFactory.cpp:193
+#6  0x00007f8586d6fa11 in LJM_Open (DeviceType=4, ConnectionType=1, Identifier=0x415abb "LJM_idANY", Handle=0x7fffdebec050)
+    at source_files/api/ExposedAPI.cpp:286
+#7  0x000000000040e74d in LabJackT4::LabJackT4() ()
+#8  0x000000000041450d in main ()
+```
+
+`boost::thread_group` is compiled into LabJackM and roscpp as a .hpp file, meaning that LabJackM and roscpp contain `boost::thread_group` symbols, while `libboost_thread.a` does not:
+
+```
+$ readelf -a /usr/lib/x86_64-linux-gnu/libboost_thread.a | grep thread_group
+$ readelf -a /usr/lib/x86_64-linux-gnu/libboost_thread.so.1.58.0 | grep thread_group
+$ readelf -a /opt/ros/kinetic/lib/libroscpp.so | grep thread_group
+  1471: 000000000014c920   368 FUNC    WEAK   DEFAULT   12 _ZN5boost12thread_groupD1
+  3163: 000000000014c920   368 FUNC    WEAK   DEFAULT   12 _ZN5boost12thread_groupD2
+$ readelf -a /usr/local/lib/libLabJackM.so.1.18.5 | grep thread_group
+  1438: 00000000001c8d20   796 FUNC    WEAK   DEFAULT   11 _ZN5boost12thread_group13
+  1657: 00000000001c6120   170 FUNC    WEAK   DEFAULT   11 _ZN5boost12thread_groupD2
+  3373: 00000000001c8b60   446 FUNC    WEAK   DEFAULT   11 _ZN5boost12thread_group8j
+  6808: 00000000001c7f20   265 FUNC    WEAK   DEFAULT   11 _ZN5boost12thread_groupC1
+  8215: 00000000001c7f20   265 FUNC    WEAK   DEFAULT   11 _ZN5boost12thread_groupC2
+ 10770: 00000000001c6120   170 FUNC    WEAK   DEFAULT   11 _ZN5boost12thread_groupD1
+```
+
+The header for that section as output by readelf is:
+```
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+```
+
+After compiling LabJackM with `-fvisibility=hidden`, the `boost::thread_group` symbols bindings were LOCAL instead of WEAK:
+
+```
+$ readelf -a build/libLabJackM.so.1.18.5  | grep thread_group
+  1982: 000000000014c560   784 FUNC    LOCAL  DEFAULT   11 _ZN5boost12thread_group13
+  3312: 000000000014c3a0   446 FUNC    LOCAL  DEFAULT   11 _ZN5boost12thread_group8j
+  7193: 00000000001498e0   170 FUNC    LOCAL  DEFAULT   11 _ZN5boost12thread_groupD1
+  8355: 00000000001498e0   170 FUNC    LOCAL  DEFAULT   11 _ZN5boost12thread_groupD2
+```
 
 ## More Details
 
